@@ -60,6 +60,54 @@ def compute_overall_risk(tx_risk: float, net_risk: float, temp_risk: float) -> t
     return round(clamped, 4), tier
 
 
+def get_transaction_risk(conn, tx_id: Optional[uuid.UUID], event_time: datetime) -> float:
+    """Look up risk score for exact transaction_id where predicted_at <= event_time.
+    If no matching prediction exists or tx_id is None, returns 0.0.
+    Does NOT substitute another transaction's prediction.
+    """
+    if not tx_id:
+        return 0.0
+
+    q_tx_pred = text("""
+        SELECT risk_score, risk_tier
+        FROM risk_predictions
+        WHERE transaction_id = :tx_id
+          AND predicted_at <= :event_time
+        ORDER BY predicted_at DESC
+        LIMIT 1;
+    """)
+    row = conn.execute(q_tx_pred, {"tx_id": tx_id, "event_time": event_time}).first()
+    if row:
+        return float(row[0])
+    return 0.0
+
+
+def get_trigger_transaction_entities(conn, cust_id: uuid.UUID, tx_id: Optional[uuid.UUID], event_time: datetime):
+    """Fetch transaction entities for case association.
+    If tx_id is present and a valid UUID, query that exact transaction and verify customer_id matches.
+    Only when there is no transaction ID in the event should the customer's latest transaction up to event_time be used.
+    """
+    if tx_id:
+        q_exact_tx = text("""
+            SELECT transaction_id, merchant_id, device_id, instrument_id, ip_id
+            FROM transactions
+            WHERE transaction_id = :tx_id
+              AND customer_id = :cust_id
+            LIMIT 1;
+        """)
+        return conn.execute(q_exact_tx, {"tx_id": tx_id, "cust_id": cust_id}).first()
+    else:
+        q_entities = text("""
+            SELECT transaction_id, merchant_id, device_id, instrument_id, ip_id
+            FROM transactions
+            WHERE customer_id = :cust_id
+              AND occurred_at <= :event_time
+            ORDER BY occurred_at DESC
+            LIMIT 1;
+        """)
+        return conn.execute(q_entities, {"cust_id": cust_id, "event_time": event_time}).first()
+
+
 def main():
     kafka_brokers = os.environ.get("KAFKA_BROKERS", "kafka:9092")
     
@@ -139,37 +187,8 @@ def main():
 
         try:
             with engine.connect() as conn:
-                # 2. Transaction Risk Signal (risk_predictions WHERE predicted_at <= event_time)
-                tx_risk = 0.0
-                if tx_id:
-                    q_tx_pred = text("""
-                        SELECT risk_score, risk_tier
-                        FROM risk_predictions
-                        WHERE transaction_id = :tx_id
-                          AND predicted_at <= :event_time
-                        ORDER BY predicted_at DESC
-                        LIMIT 1;
-                    """)
-                    row = conn.execute(q_tx_pred, {"tx_id": tx_id, "event_time": event_time}).first()
-                    if row:
-                        tx_risk = float(row[0])
-
-                if tx_risk == 0.0:
-                    # Fallback to customer's most recent transaction risk prediction
-                    q_cust_pred = text("""
-                        SELECT rp.risk_score, t.transaction_id
-                        FROM risk_predictions rp
-                        JOIN transactions t ON rp.transaction_id = t.transaction_id
-                        WHERE t.customer_id = :cust_id
-                          AND rp.predicted_at <= :event_time
-                        ORDER BY rp.predicted_at DESC
-                        LIMIT 1;
-                    """)
-                    row = conn.execute(q_cust_pred, {"cust_id": cust_id, "event_time": event_time}).first()
-                    if row:
-                        tx_risk = float(row[0])
-                        if not tx_id:
-                            tx_id = uuid.UUID(str(row[1]))
+                # 2. Transaction Risk Signal (exact transaction_id match, predicted_at <= event_time)
+                tx_risk = get_transaction_risk(conn, tx_id, event_time)
 
                 # 3. Network Risk Signal
                 net_risk = 0.0
@@ -333,15 +352,7 @@ def main():
                     })
 
                     # Case Entities
-                    q_entities = text("""
-                        SELECT transaction_id, merchant_id, device_id, instrument_id, ip_id
-                        FROM transactions
-                        WHERE customer_id = :cust_id
-                          AND occurred_at <= :event_time
-                        ORDER BY occurred_at DESC
-                        LIMIT 1;
-                    """)
-                    tx_row = conn.execute(q_entities, {"cust_id": cust_id, "event_time": event_time}).first()
+                    tx_row = get_trigger_transaction_entities(conn, cust_id, tx_id, event_time)
 
                     ins_entity = text("""
                         INSERT INTO case_entities (case_id, entity_type, entity_id, role, added_at)

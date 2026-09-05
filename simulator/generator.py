@@ -1,25 +1,57 @@
+import argparse
 import asyncio
-import sys
+import os
 import random
-import numpy as np
+import sys
 from collections import Counter
 from datetime import datetime
-from .config import SimulationConfig
-from .entities import (
-    generate_customers,
-    generate_merchants,
-    generate_devices,
-    generate_payment_instruments,
-    generate_ip_addresses
-)
-from .scenarios import (
-    NormalScenario,
-    SharedDeviceRingScenario,
-    VelocityAbuseScenario,
-    AccountFarmingScenario,
-    RefundAbuseScenario,
-    NetworkExpansionScenario
-)
+from pathlib import Path
+import numpy as np
+
+# Controlled import-path adjustment:
+# Ensure apps/api is accessible on sys.path so the simulator can resolve app.models
+# even if generator.py is executed directly as a standalone script.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_API_DIR = _REPO_ROOT / "apps" / "api"
+if _API_DIR.is_dir() and str(_API_DIR) not in sys.path:
+    sys.path.insert(0, str(_API_DIR))
+
+if __package__ is None or __package__ == '':
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+    from simulator.config import SimulationConfig
+    from simulator.entities import (
+        generate_customers,
+        generate_merchants,
+        generate_devices,
+        generate_payment_instruments,
+        generate_ip_addresses
+    )
+    from simulator.scenarios import (
+        NormalScenario,
+        SharedDeviceRingScenario,
+        VelocityAbuseScenario,
+        AccountFarmingScenario,
+        RefundAbuseScenario,
+        NetworkExpansionScenario
+    )
+else:
+    from .config import SimulationConfig
+    from .entities import (
+        generate_customers,
+        generate_merchants,
+        generate_devices,
+        generate_payment_instruments,
+        generate_ip_addresses
+    )
+    from .scenarios import (
+        NormalScenario,
+        SharedDeviceRingScenario,
+        VelocityAbuseScenario,
+        AccountFarmingScenario,
+        RefundAbuseScenario,
+        NetworkExpansionScenario
+    )
 
 class DataGenerator:
     def __init__(self, config: SimulationConfig = None):
@@ -153,11 +185,52 @@ class DataGenerator:
         for t, count in counts.items():
             print(f"  {t}: {count}")
 
-if __name__ == '__main__':
-    import os
+def main():
+    parser = argparse.ArgumentParser(
+        description="SentinelGraph synthetic fraud and payment transaction data generator."
+    )
+    parser.add_argument(
+        '--db-url',
+        type=str,
+        default=None,
+        help='PostgreSQL database URL (defaults to DATABASE_URL environment variable if set). If omitted, data is generated in memory only without database insertion.'
+    )
+    parser.add_argument(
+        'db_url_pos',
+        nargs='?',
+        default=None,
+        metavar='DB_URL',
+        help='Optional positional database URL for backwards compatibility.'
+    )
+    parser.add_argument(
+        '--seed',
+        type=int,
+        default=None,
+        help='Random seed for deterministic generation (defaults to SimulationConfig.seed = 42).'
+    )
+    parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='Generate data in memory only and print summary, without writing to the database.'
+    )
+    args = parser.parse_args()
+
     config = SimulationConfig()
+    if args.seed is not None:
+        config.seed = args.seed
+
     generator = DataGenerator(config)
-    db_url = sys.argv[1] if len(sys.argv) > 1 else os.getenv('DATABASE_URL')
-    if not db_url:
-        print("Warning: No database URL provided. Data will be generated in memory only.")
-    asyncio.run(generator.generate_all(db_url))
+
+    if args.dry_run:
+        target_db_url = None
+        print("Dry run mode: generating data in memory only, skipping database persistence.")
+    else:
+        target_db_url = args.db_url or args.db_url_pos or os.getenv('DATABASE_URL')
+        if not target_db_url:
+            print("Warning: No database URL provided. Data will be generated in memory only.")
+
+    asyncio.run(generator.generate_all(target_db_url))
+
+
+if __name__ == '__main__':
+    main()

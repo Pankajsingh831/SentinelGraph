@@ -10,9 +10,11 @@ from app.schemas.case import (
     CaseTimelineResponse, DecisionRequest, DecisionResponse
 )
 from app.schemas.ai import InvestigateRequest, InvestigateResponse
+from app.schemas.entity_resolution import EntityResolutionResponse
 from app.repositories.case_repo import CaseRepository
 from app.repositories.audit_repo import AuditRepository
 from app.services.case_service import CaseService
+from app.services.case_investigation_context import CaseInvestigationContextService
 from app.services.ai_investigator import AIInvestigator
 from app.schemas import PaginatedResponse
 
@@ -78,46 +80,43 @@ async def get_case_timeline(
 ):
     return await case_service.get_case_timeline(case_id)
 
+@router.get("/{case_id}/entity-resolution", response_model=EntityResolutionResponse)
+async def get_case_entity_resolution(
+    case_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    case_service: CaseService = Depends(get_case_service)
+):
+    resolution = await case_service.get_case_entity_resolution(case_id)
+    if not resolution:
+        raise HTTPException(status_code=404, detail="CASE_NOT_FOUND")
+    return resolution
+
 @router.post("/{case_id}/investigate", response_model=InvestigateResponse)
 async def investigate_case(
     case_id: uuid.UUID,
     request: InvestigateRequest,
     user: User = Depends(get_current_user),
-    case_service: CaseService = Depends(get_case_service)
+    case_service: CaseService = Depends(get_case_service),
+    db: AsyncSession = Depends(get_db),
 ):
     case = await case_service.get_case(case_id)
     if not case:
         raise HTTPException(status_code=404, detail="CASE_NOT_FOUND")
-        
-    evidence = await case_service.get_case_evidence(case_id)
+
+    context_service = CaseInvestigationContextService(db, case_service.case_repo)
+    investigation_context = await context_service.build(case)
+    evidence = investigation_context["case_evidence"]
     if not evidence:
         raise HTTPException(status_code=422, detail="NO_EVIDENCE_FOR_INVESTIGATION")
-        
-    case_data = {
-        "case_id": str(case.case_id),
-        "overall_risk_score": case.overall_risk_score,
-        "transaction_risk_score": case.transaction_risk_score,
-        "network_risk_score": case.network_risk_score,
-        "temporal_risk_score": case.temporal_risk_score,
-    }
-    
-    evidence_dicts = [
-        {
-            "evidence_id": str(e.evidence_id),
-            "evidence_type": e.evidence_type,
-            "severity": e.severity,
-            "description": e.description
-        } for e in evidence
-    ]
-    
+
     investigator = AIInvestigator()
     return await investigator.investigate(
         case_id=case_id,
-        case_data=case_data,
-        evidence=evidence_dicts,
-        follow_up_question=request.follow_up_question
+        case_data=investigation_context,
+        evidence=evidence,
+        case_entities=investigation_context["case_entities"],
+        follow_up_question=request.follow_up_question,
     )
-
 @router.post("/{case_id}/decision", response_model=DecisionResponse)
 async def make_decision(
     case_id: uuid.UUID,

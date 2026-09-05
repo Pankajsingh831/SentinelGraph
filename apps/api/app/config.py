@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = 'HS256'
     JWT_EXPIRATION_MINUTES: int = 480
     ANTHROPIC_API_KEY: str = ''
+    # Keep the provider model configurable so deployments can select an enabled model
+    # without changing application code. This preserves the existing default.
+    ANTHROPIC_MODEL: str = 'claude-3-sonnet-20240229'
     MODEL_ACTIVE_VERSION: str = 'xgb-graph-v1'
     RISK_TIER_THRESHOLDS: str = '0.30,0.60,0.80'
     RISK_AGGREGATION_WEIGHTS: str = '0.50,0.30,0.20'
