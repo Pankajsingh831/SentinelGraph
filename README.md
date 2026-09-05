@@ -1,5 +1,11 @@
 # SentinelGraph
 
+Demonstation/video
+## 🎥 Project Demo
+
+[▶️ Watch Project Demo](https://drive.google.com/file/d/1OuK_Ddy6FADIWiO0kerjzHGxrWcApOOs/view?usp=drivesdk)
+
+
 **AI-Assisted Payment Abuse Detection & Investigation Platform**
 
 > Transaction-level fraud models miss *coordinated* abuse — individually normal-looking transactions that become suspicious only when viewed as a network. SentinelGraph combines real-time ML scoring, graph intelligence, temporal anomaly detection, and evidence-grounded AI investigation in a single analyst workbench.
